@@ -1,0 +1,137 @@
+# diff.moth's tests: moth test diff.test.moth
+
+use "diff.moth" as diff
+
+to ops_of with changes
+    set made to empty list
+    for each c in changes
+        add c's op to made
+    end
+    return made
+end
+
+to test_changes
+    set made to diff's changes("a\nb\nc\n", "a\nx\nc\n")
+    expect ops_of(made) is list of "same", "removed", "added", "same"
+    expect item 2 of made is record with op "removed", words "b", old 2, new nothing
+    expect item 3 of made is record with op "added", words "x", old nothing, new 2
+    expect item 4 of made is record with op "same", words "c", old 3, new 3
+    expect ops_of(diff's changes("same\n", "same\n")) is list of "same"
+    expect ops_of(diff's changes("", "")) is empty list
+    expect ops_of(diff's changes("", "new\n")) is list of "added"
+    expect ops_of(diff's changes("old\n", "")) is list of "removed"
+    expect ops_of(diff's changes((list of "a", "b", "c"), (list of "c", "a"))) is list of "removed", "removed", "same",
+        "added"
+end
+
+to test_fewest_changes
+    # the classic example: ABCABBA to CBABAC takes 5 changes
+    set a to list of "A", "B", "C", "A", "B", "B", "A"
+    set b to list of "C", "B", "A", "B", "A", "C"
+    set made to diff's changes(a, b)
+    set count to 0
+    for each c in made
+        if c's op is not "same"
+            add 1 to count
+        end
+    end
+    expect count is 5
+    # what's kept of each side is each side, in order
+    set old to empty list
+    set new to empty list
+    for each c in made
+        if c's op is not "added"
+            add c's words to old
+        end
+        if c's op is not "removed"
+            add c's words to new
+        end
+    end
+    expect old is a
+    expect new is b
+end
+
+to test_stats
+    expect diff's stats("a\nb\nc\n", "a\nc\nd\ne\n") is record with added 2, removed 1
+end
+
+to test_unified
+    set before to "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n"
+    set after to "one\ntwo\nthree\nFOUR\nfive\nsix\nseven\neight\nnine\nten\neleven\n"
+    set made to diff's unified(before, after, "a/n.txt", "b/n.txt")
+    expect made is "--- a/n.txt\n+++ b/n.txt\n@@ -1,10 +1,11 @@\n one\n two\n three\n-four\n+FOUR\n five\n six\n seven\n eight\n nine\n ten\n+eleven\n"
+    set apart to diff's unified(before, after, "a", "b", 1)
+    expect apart is "--- a\n+++ b\n@@ -3,3 +3,3 @@\n three\n-four\n+FOUR\n five\n@@ -10 +10,2 @@\n ten\n+eleven\n"
+    expect diff's unified(before, before) is ""
+end
+
+to test_unified_at_the_edges
+    expect diff's unified("", "a\n") is "--- a\n+++ b\n@@ -0,0 +1 @@\n+a\n"
+    expect diff's unified("a\n", "") is "--- a\n+++ b\n@@ -1 +0,0 @@\n-a\n"
+    expect diff's unified("a\nb\n", "b\n", "a", "b", 0) is "--- a\n+++ b\n@@ -1 +0,0 @@\n-a\n"
+    expect diff's unified("a\nb\n", "a\nx\nb\n", "a", "b", 0) is "--- a\n+++ b\n@@ -1,0 +2 @@\n+x\n"
+    # a text without a new line at its end
+    expect diff's unified("a\nb", "a\nb\n", "a", "b", 0) is "--- a\n+++ b\n@@ -2 +2 @@\n-b\n\\ No newline at end of file\n+b\n"
+    expect diff's unified("a\n", "a\nb", "a", "b", 0) is "--- a\n+++ b\n@@ -1,0 +2 @@\n+b\n\\ No newline at end of file\n"
+end
+
+to test_words
+    expect diff's marked("the quick brown fox", "the slow brown cat") is "the [-quick-]{+slow+} brown [-fox-]{+cat+}"
+    expect diff's marked("same words", "same words") is "same words"
+    expect diff's marked("a b", "a b c") is "a b{+ c+}"
+    set made to diff's word_changes("one two", "one three")
+    expect ops_of(made) is list of "same", "same", "removed", "added"
+end
+
+to test_apply
+    set before to "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n"
+    set after to "zero\none\ntwo\nthree\nFOUR\nfive\nsix\nseven\neight\nnine\nten\neleven\n"
+    for each context in list of 0, 1, 3
+        set patch to diff's unified(before, after, "a", "b", context)
+        expect diff's apply(before, patch) is after
+    end
+    expect diff's apply(before, "") is before
+    # lines that moved: a part is found near where it says it is
+    set moved to "extra\nextra\n" + before
+    expect diff's apply(moved, diff's unified(before, after, "a", "b", 1)) is "extra\nextra\n" + after
+    # new lines at the end, and none
+    expect diff's apply("a\nb", diff's unified("a\nb", "a\nb\n")) is "a\nb\n"
+    expect diff's apply("a\nb\n", diff's unified("a\nb\n", "a\nc")) is "a\nc"
+    expect diff's apply("", diff's unified("", "new\n")) is "new\n"
+    expect diff's apply("gone\n", diff's unified("gone\n", "")) is ""
+    # a removed line that starts with -- is read by the @@ line's counts
+    expect diff's apply("x\n-- note\ny\n", diff's unified("x\n-- note\ny\n", "x\ny\n")) is "x\ny\n"
+end
+
+to test_apply_mistakes
+    try
+        diff's apply("nothing like it\n", diff's unified("a\nb\n", "a\nc\n"))
+        expect no
+    if it fails with why
+        expect why is "the part of the diff at @@ -1,2 +1,2 @@ doesn't fit: its lines aren't in the text"
+    end
+    try
+        diff's apply("a\n", "@@ -1,2 +1,2 @@\n a\n")
+        expect no
+    if it fails with why
+        expect why is "the diff ends inside the part at @@ -1,2 +1,2 @@"
+    end
+end
+
+to test_a_long_text
+    set before to empty list
+    set after to empty list
+    for each k from 1 to 3000
+        add "line " + k to before
+        if remainder of k divided by 100 is 0
+            add "changed " + k to after
+        else
+            add "line " + k to after
+        end
+    end
+    set made to diff's stats(before, after)
+    expect made is record with added 30, removed 30
+    set a to join before with "\n"
+    set b to join after with "\n"
+    expect diff's apply(a, diff's unified(a, b)) is b
+end

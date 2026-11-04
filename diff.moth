@@ -1,0 +1,621 @@
+# What changed between two texts: line by line, as `diff -u` and git write it, or word by word, with the
+# fewest changes (Myers' algorithm), and a diff applied to a text again. In Moth alone, so it works everywhere.
+#
+#   use the package "diff" as diff
+#   set before to read "notes.txt"
+#   set after to "..."
+#   say diff's unified(before, after, "notes.txt", "notes.txt")   # --- notes.txt, +++ notes.txt, @@ ... @@
+#   for each c in diff's changes(before, after)                     # line by line
+#       say c's op " " c's words                                    # same, removed or added; and old, new
+#   end
+#   say diff's stats(before, after)                                 # (record with added 3, removed 1)
+#   say diff's marked("the quick brown fox", "the slow brown cat") # the [-quick-]{+slow+} brown [-fox-]{+cat+}
+#   say diff's apply(before, diff's unified(before, after))        # after again
+#
+# changes(a, b) gives a record for each line: its op ("same", "removed" or "added"), its words, and old and
+# new, its line's number in a and in b (nothing for a line that isn't in one). a and b are texts, cut at their
+# new lines, or lists of lines. unified(a, b, old_name, new_name, context) has `context` lines (3 if none is
+# given) around each change, and is "" when nothing changed; a text with no new line at its end gets
+# "\ No newline at end of file", as diff writes it. word_changes(a, b) is changes between words and the spaces
+# between them, and marked(a, b) writes them in a line, as git diff --word-diff does. apply(words, patch)
+# makes the changes a unified diff says, finding each part's lines near where it says they are, and fails if
+# they aren't there.
+
+# ---------- lines ----------
+
+to changes with a, b
+    set old to diff_lines(a)
+    set new to diff_lines(b)
+    return diff_changes_of(old's lines, new's lines, old's line_keys, new's line_keys)
+end
+
+# how many lines were added and removed
+to stats with a, b
+    set added to 0
+    set removed to 0
+    for each c in changes(a, b)
+        if c's op is "added"
+            add 1 to added
+        else if c's op is "removed"
+            add 1 to removed
+        end
+    end
+    return record with added added, removed removed
+end
+
+# the changes as diff -u writes them: a header, then each part that changed, with lines around it
+to unified with a, b, old_name or "a", new_name or "b", context or 3
+    set old to diff_lines(a)
+    set new to diff_lines(b)
+    set all to diff_changes_of(old's lines, new's lines, old's line_keys, new's line_keys)
+    set count to length of all
+    # where each part starts and ends: changes, and `context` lines around them, merged when they meet
+    set spans to empty list
+    set k to 1
+    repeat while k is at most count
+        if diff_op_at(all, k) is "same"
+            add 1 to k
+        else
+            set upto to k
+            repeat while upto + 1 is at most count and diff_op_at(all, upto + 1) is not "same"
+                add 1 to upto
+            end
+            set from to k - context
+            if from is less than 1
+                set from to 1
+            end
+            set last_line to upto + context
+            if last_line is greater than count
+                set last_line to count
+            end
+            set merged to no
+            if length of spans is greater than 0
+                set last to item (length of spans) of spans
+                if from is at most last's upto + 1
+                    set last's upto to last_line
+                    set merged to yes
+                end
+            end
+            if not merged
+                add (record with from from, upto last_line) to spans
+            end
+            set k to upto + 1
+        end
+    end
+    if length of spans is 0
+        return ""
+    end
+    set lines to list of "--- " + old_name, "+++ " + new_name
+    for each span in spans
+        set old_start to 0
+        set new_start to 0
+        set old_count to 0
+        set new_count to 0
+        set body to empty list
+        for each j from span's from to span's upto
+            set c to item j of all
+            if c's op is "same"
+                add " " + c's words to body
+                diff_no_end(body, c, old, new)
+                add 1 to old_count
+                add 1 to new_count
+                if old_start is 0
+                    set old_start to c's old
+                end
+                if new_start is 0
+                    set new_start to c's new
+                end
+            else if c's op is "removed"
+                add "-" + c's words to body
+                diff_no_end(body, c, old, nothing)
+                add 1 to old_count
+                if old_start is 0
+                    set old_start to c's old
+                end
+            else
+                add "+" + c's words to body
+                diff_no_end(body, c, nothing, new)
+                add 1 to new_count
+                if new_start is 0
+                    set new_start to c's new
+                end
+            end
+        end
+        if old_start is 0
+            set old_start to diff_line_before(all, span's from, "old")
+        end
+        if new_start is 0
+            set new_start to diff_line_before(all, span's from, "new")
+        end
+        add "@@ -" + diff_range(old_start, old_count) + " +" + diff_range(new_start, new_count) + " @@" to lines
+        for each line in body
+            add line to lines
+        end
+    end
+    return (join lines with "\n") + "\n"
+end
+
+# the line number before a part that has no line of a or b: where an empty range of it starts
+to diff_op_at with all, k
+    set c to item k of all
+    return c's op
+end
+
+to diff_line_before with all, from, side
+    set k to from - 1
+    repeat while k is at least 1
+        set c to item k of all
+        if side is "old" and c's old is not nothing
+            return c's old
+        else if side is "new" and c's new is not nothing
+            return c's new
+        end
+        set k to k - 1
+    end
+    return 0
+end
+
+to diff_range with start, count
+    if count is 1
+        return "" + start
+    end
+    return "" + start + "," + count
+end
+
+# "\ No newline at end of file" after the last line of a text that has no new line at its end
+to diff_no_end with body, c, old, new
+    if old is not nothing and not old's ends_line and c's old is length of old's lines
+        add diff_no_end_words() to body
+    else if new is not nothing and not new's ends_line and c's new is length of new's lines
+        add diff_no_end_words() to body
+    end
+end
+
+to diff_no_end_words
+    return "\\ No newline at end of file"
+end
+
+# a text's lines, whether it ends with a new line, and a key for each line to compare it by (the last line of
+# a text with no new line at its end is another line than the same words with one)
+to diff_lines with given
+    set lines to empty list
+    set ends_line to yes
+    if diff_is_text(given)
+        set lines to split given by "\n"
+        if length of lines is greater than 0 and item (length of lines) of lines is ""
+            set lines to items 1 to length of lines - 1 of lines
+        else
+            set ends_line to given is ""
+        end
+    else
+        for each line in given
+            add "" + line to lines
+        end
+    end
+    set compared to empty list
+    for each line in lines
+        add line to compared
+    end
+    if not ends_line and length of compared is greater than 0
+        set last_key to item (length of compared) of compared
+        set item (length of compared) of compared to last_key + "\n"
+    end
+    return record with lines lines, line_keys compared, ends_line ends_line
+end
+
+to diff_is_text with given
+    try
+        return uppercase of given is not nothing
+    if it fails
+        return no
+    end
+end
+
+# ---------- the fewest changes ----------
+
+# a change for each line: the same lines at the start and the end, and Myers' shortest edit script between
+to diff_changes_of with old_lines, new_lines, old_keys, new_keys
+    # each different line as a number, so lines compare at once
+    set numbers to empty dictionary
+    set a to diff_numbered(old_keys, numbers)
+    set b to diff_numbered(new_keys, numbers)
+    set n to length of a
+    set m to length of b
+    set front to 0
+    repeat while front is less than n and front is less than m and item (front + 1) of a is item (front + 1) of b
+        add 1 to front
+    end
+    set back to 0
+    repeat while back is less than n - front and back is less than m - front and item (n - back) of a is item (m - back)
+        of b
+        add 1 to back
+    end
+    set made to empty list
+    for each k from 1 to front
+        add (record with op "same", words item k of old_lines, old k, new k) to made
+    end
+    set middle to diff_myers(diff_part(a, front + 1, n - back), diff_part(b, front + 1, m - back))
+    for each step in middle
+        set op to item 1 of step
+        set x to item 2 of step + front
+        set y to item 3 of step + front
+        if op is "same"
+            add (record with op "same", words item x of old_lines, old x, new y) to made
+        else if op is "removed"
+            add (record with op "removed", words item x of old_lines, old x, new nothing) to made
+        else
+            add (record with op "added", words item y of new_lines, old nothing, new y) to made
+        end
+    end
+    for each k from 1 to back
+        set x to n - back + k
+        set y to m - back + k
+        add (record with op "same", words item x of old_lines, old x, new y) to made
+    end
+    return made
+end
+
+to diff_numbered with given_keys, numbers
+    set made to empty list
+    for each key in given_keys
+        if not (key is in numbers)
+            set item key of numbers to length of numbers + 1
+        end
+        add item key of numbers to made
+    end
+    return made
+end
+
+to diff_part with xs, from, upto
+    if from is greater than upto
+        return empty list
+    end
+    return items from to upto of xs
+end
+
+# Myers' O((N+M)D) shortest edit script, as a list of steps: op, and the place in a and in b (from 1); past
+# 4000 changes it stops looking, and the rest of a is removed and the rest of b added
+to diff_myers with a, b
+    set n to length of a
+    set m to length of b
+    set steps to empty list
+    if n is 0 and m is 0
+        return steps
+    end
+    set most to n + m
+    set offset to most + 2
+    # v: for each diagonal k (x - y), the furthest x reached; item (k + offset) of v
+    set v to empty list
+    repeat 2 * most + 3 times
+        add 0 to v
+    end
+    set trace to empty list
+    set found to no
+    set d to 0
+    set limit to 4000
+    repeat while not found and d is at most most and d is at most limit
+        # what v was after the step before this one, for the diagonals it reached
+        if d is 0
+            add empty list to trace
+        else
+            add (items (1 - d + offset) to (d - 1 + offset) of v) to trace
+        end
+        set k to 0 - d
+        repeat while k is at most d and not found
+            set x to 0
+            if k is 0 - d or (k is not d and item (k - 1 + offset) of v is less than item (k + 1 + offset) of v)
+                set x to item (k + 1 + offset) of v
+            else
+                set x to (item (k - 1 + offset) of v) + 1
+            end
+            set y to x - k
+            repeat while x is less than n and y is less than m and item (x + 1) of a is item (y + 1) of b
+                add 1 to x
+                add 1 to y
+            end
+            set item (k + offset) of v to x
+            if x is at least n and y is at least m
+                set found to yes
+            end
+            set k to k + 2
+        end
+        if not found
+            add 1 to d
+        end
+    end
+    if not found
+        return diff_all_changed(n, m)
+    end
+    # back from the end, along the steps
+    set x to n
+    set y to m
+    set back_steps to empty list
+    repeat while d is at least 0
+        set kept to item (d + 1) of trace
+        set k to x - y
+        set before_k to k - 1
+        if k is 0 - d or (k is not d and diff_kept(kept, k - 1, d) is less than diff_kept(kept, k + 1, d))
+            set before_k to k + 1
+        end
+        set before_x to 0
+        if d is greater than 0
+            set before_x to diff_kept(kept, before_k, d)
+        end
+        set before_y to before_x - before_k
+        repeat while x is greater than before_x and y is greater than before_y
+            add (list of "same", x, y) to back_steps
+            set x to x - 1
+            set y to y - 1
+        end
+        if d is greater than 0
+            if x is before_x
+                add (list of "added", x, y) to back_steps
+            else
+                add (list of "removed", x, y) to back_steps
+            end
+        end
+        set x to before_x
+        set y to before_y
+        set d to d - 1
+    end
+    set k to length of back_steps
+    repeat while k is at least 1
+        add item k of back_steps to steps
+        set k to k - 1
+    end
+    return steps
+end
+
+# v's x for diagonal k, as it was kept before step d (which had diagonals -(d-1) to d-1)
+to diff_kept with kept, k, d
+    return item (k + d) of kept
+end
+
+to diff_all_changed with n, m
+    set steps to empty list
+    for each x from 1 to n
+        add (list of "removed", x, 0) to steps
+    end
+    for each y from 1 to m
+        add (list of "added", 0, y) to steps
+    end
+    return steps
+end
+
+# ---------- words ----------
+
+# changes between the words of two texts, and the spaces between them
+to word_changes with a, b
+    set old to diff_words(a)
+    set new to diff_words(b)
+    return diff_changes_of(old, new, old, new)
+end
+
+# the two texts in one, as git diff --word-diff writes it: [-removed-]{+added+}
+to marked with a, b
+    set made to empty list
+    set removed to empty list
+    set added to empty list
+    for each c in word_changes(a, b)
+        if c's op is "same"
+            diff_flush_marks(made, removed, added)
+            set removed to empty list
+            set added to empty list
+            add c's words to made
+        else if c's op is "removed"
+            add c's words to removed
+        else
+            add c's words to added
+        end
+    end
+    diff_flush_marks(made, removed, added)
+    return join made with ""
+end
+
+to diff_flush_marks with made, removed, added
+    if length of removed is greater than 0
+        add "[-" + (join removed with "") + "-]" to made
+    end
+    if length of added is greater than 0
+        add "\{+" + (join added with "") + "+}" to made
+    end
+end
+
+# words, and each run of spaces between them, in order
+to diff_words with words
+    set made to empty list
+    set piece to empty list
+    set spaces to no
+    for each c in "" + words
+        set is_space to c is " " or c is "\n" or c is "\t"
+        if length of piece is greater than 0 and is_space is not spaces
+            add (join piece with "") to made
+            set piece to empty list
+        end
+        set spaces to is_space
+        add c to piece
+    end
+    if length of piece is greater than 0
+        add (join piece with "") to made
+    end
+    return made
+end
+
+# ---------- applying ----------
+
+# the text with the changes a unified diff says made to it
+to apply with words, patch
+    set old to diff_lines(words)
+    set lines to old's lines
+    set ends_line to old's ends_line
+    set made to empty list
+    set at to 1
+    set patch_lines to split ("" + patch) by "\n"
+    set k to 1
+    set count to length of patch_lines
+    repeat while k is at most count
+        set line to item k of patch_lines
+        if diff_starts(line, "@@ ")
+            set hunk to diff_hunk(patch_lines, k)
+            set start to diff_find(lines, hunk's old, hunk's old_start, at)
+            if start is 0
+                fail with "the part of the diff at " + line + " doesn't fit: its lines aren't in the text"
+            end
+            for each j from at to start - 1
+                add item j of lines to made
+            end
+            for each new_line in hunk's new
+                add new_line to made
+            end
+            set at to start + length of hunk's old
+            if hunk's old_no_end
+                set ends_line to yes
+            end
+            if hunk's new_no_end
+                set ends_line to no
+            end
+            set k to hunk's next
+        else
+            add 1 to k
+        end
+    end
+    for each j from at to length of lines
+        add item j of lines to made
+    end
+    if length of made is 0
+        return ""
+    end
+    set result to join made with "\n"
+    if ends_line
+        set result to result + "\n"
+    end
+    return result
+end
+
+# one part of a unified diff, from its @@ line: the lines it has in the old text, those it has in the new, where
+# it starts, whether either side has no new line at its end, and the patch's line after it
+to diff_hunk with patch_lines, k
+    set head to item k of patch_lines
+    set parts to split head by " "
+    if length of parts is less than 4 or item 4 of parts is not "@@"
+        fail with "'" + head + "' isn't a diff's @@ line"
+    end
+    set old_range to diff_range_of(item 2 of parts, head)
+    set new_range to diff_range_of(item 3 of parts, head)
+    set old_lines to empty list
+    set new_lines to empty list
+    set old_no_end to no
+    set new_no_end to no
+    set last to ""
+    set j to k + 1
+    set count to length of patch_lines
+    if count is greater than 0 and item count of patch_lines is ""
+        # the patch's end, after its last new line
+        set count to count - 1
+    end
+    repeat while j is at most count and (length of old_lines is less than old_range's count
+        or length of new_lines is less than new_range's count or diff_is_no_end_mark(item j of patch_lines))
+        set line to item j of patch_lines
+        set mark to " "
+        set rest to ""
+        if length of line is greater than 0
+            set mark to item 1 of line
+        end
+        if length of line is greater than 1
+            set rest to items 2 to length of line of line
+        end
+        if diff_is_no_end_mark(line)
+            if last is "-"
+                set old_no_end to yes
+            else if last is "+"
+                set new_no_end to yes
+            else
+                set old_no_end to yes
+                set new_no_end to yes
+            end
+        else if mark is " "
+            add rest to old_lines
+            add rest to new_lines
+            set last to " "
+        else if mark is "-"
+            add rest to old_lines
+            set last to "-"
+        else if mark is "+"
+            add rest to new_lines
+            set last to "+"
+        else
+            fail with "line " + j + " of the diff isn't part of the part at " + head
+        end
+        add 1 to j
+    end
+    if length of old_lines is not old_range's count or length of new_lines is not new_range's count
+        fail with "the diff ends inside the part at " + head
+    end
+    return record with old old_lines, new new_lines, old_start old_range's start, old_no_end old_no_end,
+        new_no_end new_no_end, next j
+end
+
+to diff_is_no_end_mark with line
+    return diff_starts(line, diff_backslash())
+end
+
+to diff_backslash
+    return items 1 to 1 of diff_no_end_words()
+end
+
+# -5,3 is a start of 5 and a count of 3; -5 a count of 1
+to diff_range_of with written, head
+    set body to items 2 to length of written of written
+    set count to 1
+    set comma to position of "," in body
+    if comma is greater than 0
+        set count to number of (items comma + 1 to length of body of body)
+        set body to items 1 to comma - 1 of body
+    end
+    try
+        return record with start number of body, count count
+    if it fails
+        fail with "'" + head + "' isn't a diff's @@ line"
+    end
+end
+
+# where the lines are in the text, nearest the line they're said to start at, and not before `at`; or 0
+to diff_find with lines, wanted, near, at
+    set size to length of wanted
+    if size is 0
+        # lines put in after line `near`
+        set start to near + 1
+        if start is less than at
+            set start to at
+        end
+        return start
+    end
+    set most to length of lines - size + 1
+    set best to 0
+    set gap to 0
+    repeat while best is 0 and (near - gap is at least at or near + gap is at most most)
+        for each start in list of near - gap, near + gap
+            if best is 0 and start is at least at and start is at most most and diff_fits(lines, wanted, start)
+                set best to start
+            end
+        end
+        add 1 to gap
+    end
+    return best
+end
+
+to diff_fits with lines, wanted, start
+    set k to 0
+    for each line in wanted
+        if item (start + k) of lines is not line
+            return no
+        end
+        add 1 to k
+    end
+    return yes
+end
+
+to diff_starts with words, start
+    set size to length of start
+    return length of words is at least size and (items 1 to size of words) is start
+end
