@@ -1,11 +1,11 @@
 # diff
 
-What changed between two texts, for [Moth](https://github.com/samyyy2423/moth) programs: line by line, as
+What changed between two texts, for [Folio](https://github.com/samyyy2423/folio) programs: line by line, as
 `diff -u` and git write it, or word by word, with the fewest changes (Myers' algorithm), and a diff applied to
-a text again. In Moth alone, so it works everywhere Moth does.
+a text again. In Folio alone, so it works everywhere Folio does.
 
 ```text
-moth add diff
+folio add diff
 ```
 
 ```
@@ -51,9 +51,9 @@ removed and the rest of the second added.
 ## Tests
 
 ```text
-moth test diff.test.moth
+folio test diff.test.folio
 ```
 
 ## License
 
-Apache License 2.0, as Moth is: see [LICENSE](LICENSE).
+Apache License 2.0, as Folio is: see [LICENSE](LICENSE).

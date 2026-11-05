@@ -1,5 +1,5 @@
 # What changed between two texts: line by line, as `diff -u` and git write it, or word by word, with the
-# fewest changes (Myers' algorithm), and a diff applied to a text again. In Moth alone, so it works everywhere.
+# fewest changes (Myers' algorithm), and a diff applied to a text again. In Folio alone, so it works everywhere.
 #
 #   use the package "diff" as diff
 #   set before to read "notes.txt"

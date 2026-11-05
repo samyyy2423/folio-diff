@@ -1,6 +1,6 @@
-# diff.moth's tests: moth test diff.test.moth
+# diff.folio's tests: folio test diff.test.folio
 
-use "diff.moth" as diff
+use "diff.folio" as diff
 
 to ops_of with changes
     set made to empty list
